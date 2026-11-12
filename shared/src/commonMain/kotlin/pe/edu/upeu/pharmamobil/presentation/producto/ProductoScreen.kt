@@ -1,0 +1,498 @@
+package pe.edu.upeu.pharmamobil.presentation.producto
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Medication
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
+import org.koin.compose.viewmodel.koinViewModel
+import pe.edu.upeu.pharmamobil.platform.tiempoActualMillis
+import pe.edu.upeu.pharmamobil.presentation.components.EstadoVacio
+import pe.edu.upeu.pharmamobil.presentation.components.MensajeExito
+import pe.edu.upeu.pharmamobil.presentation.components.ValidatedTextField
+import pe.edu.upeu.pharmamobil.presentation.detalle.DetalleProductoViewModel
+
+@Composable
+fun ProductoScreen(
+    viewModel: ProductoViewModel,
+    puedeEscribir: Boolean = true,
+    modifier: Modifier = Modifier,
+    detalleViewModel: DetalleProductoViewModel = koinViewModel()
+) {
+
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // NUEVO: Observamos el estado de sincronización de SQLite (Paso 4 - Sesión 13)
+    val syncState by viewModel.syncState.collectAsStateWithLifecycle()
+
+    // Borra el mensaje automáticamente después de 3 segundos
+    LaunchedEffect(uiState.mensajeExito) {
+        if (uiState.mensajeExito != null) {
+            delay(3000)
+            viewModel.limpiarMensajeExito()
+        }
+    }
+
+    // Borra el mensaje apenas el usuario cambia de pantalla o cierra sesión
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.limpiarMensajeExito()
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+
+        // Solo se muestra si el rol tiene CATALOGO_ESCRIBIR
+        if (puedeEscribir) {
+            FormularioProductoCard(
+                formulario = uiState.formulario,
+                registrando = uiState.registrando,
+                onNombreChange = viewModel::onNombreChange,
+                onPrecioChange = viewModel::onPrecioChange,
+                onStockChange = viewModel::onStockChange,
+                onRegistrar = viewModel::registrar
+            )
+        }
+
+        // Estado de sincronización observable: conexión, pendientes, fallidas y antigüedad (Guía 13 - Paso 4)
+        BarraEstadoSincronizacion(
+            syncState = syncState,
+            avisoRed = uiState.avisoRed,
+            onReintentarFallidas = viewModel::reintentarFallidas
+        )
+
+        uiState.mensajeExito?.let {
+            MensajeExito(it)
+        }
+
+        EncabezadoInventario(
+            fase = uiState.fase,
+            sincronizando = uiState.sincronizando,
+            onSincronizar = viewModel::sincronizar
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+
+            when (val fase = uiState.fase) {
+
+                ProductoUiState.Fase.Cargando ->
+                    Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+
+                        CircularProgressIndicator()
+
+                        Text(
+                            text = "Cargando inventario…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                ProductoUiState.Fase.SinProductos ->
+                    EstadoVacio(
+                        icono = Icons.Default.Inventory2,
+                        titulo = "Todavía no hay productos",
+                        descripcion = if (puedeEscribir) {
+                            "Registra el primero con el formulario de arriba."
+                        } else {
+                            "No hay productos registrados en el catálogo."
+                        },
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+
+                is ProductoUiState.Fase.ConProductos ->
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(
+                            items = fase.productos,
+                            key = { it.id }
+                        ) { producto ->
+                            ProductoItem(
+                                producto = producto,
+                                onCompartir = { detalleViewModel.compartir(producto) }
+                            )
+                        }
+                    }
+
+                is ProductoUiState.Fase.Error ->
+                    EstadoVacio(
+                        icono = Icons.Default.CloudOff,
+                        titulo = "No pudimos cargar el inventario",
+                        descripcion = fase.mensaje,
+                        colorIcono = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.align(Alignment.Center),
+                        accion = {
+                            FilledTonalButton(onClick = viewModel::cargarProductos) {
+                                Text("Reintentar")
+                            }
+                        }
+                    )
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun FormularioProductoCard(
+    formulario: FormularioProducto,
+    registrando: Boolean,
+    onNombreChange: (String) -> Unit,
+    onPrecioChange: (String) -> Unit,
+    onStockChange: (String) -> Unit,
+    onRegistrar: () -> Unit
+) {
+
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+
+            Text(
+                text = "Registrar producto",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            ValidatedTextField(
+                value = formulario.nombre,
+                onValueChange = onNombreChange,
+                label = "Nombre",
+                error = formulario.nombreError,
+                leadingIcon = Icons.Default.Medication,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+
+                ValidatedTextField(
+                    value = formulario.precio,
+                    onValueChange = onPrecioChange,
+                    label = "Precio",
+                    error = formulario.precioError,
+                    ayuda = "En soles",
+                    keyboardType = KeyboardType.Decimal,
+                    modifier = Modifier.weight(1f)
+                )
+
+                ValidatedTextField(
+                    value = formulario.stock,
+                    onValueChange = onStockChange,
+                    label = "Stock",
+                    error = formulario.stockError,
+                    ayuda = "Unidades",
+                    keyboardType = KeyboardType.Number,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Button(
+                onClick = onRegistrar,
+                enabled = !registrando,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (registrando) "Registrando…" else "Registrar")
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun EncabezadoInventario(
+    fase: ProductoUiState.Fase,
+    sincronizando: Boolean,
+    onSincronizar: () -> Unit
+) {
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+
+        Text(
+            text = "Inventario",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.weight(1f)
+        )
+
+        if (fase is ProductoUiState.Fase.ConProductos) {
+
+            val cantidad = fase.productos.size
+
+            Text(
+                text = if (cantidad == 1) "1 producto" else "$cantidad productos",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        TextButton(
+            onClick = onSincronizar,
+            enabled = !sincronizando
+        ) {
+            Icon(
+                imageVector = Icons.Default.Sync,
+                contentDescription = "Sincronizar",
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(if (sincronizando) "Sincronizando…" else "Sincronizar")
+        }
+    }
+}
+
+
+@Composable
+private fun ProductoItem(
+    producto: ProductoUi,
+    onCompartir: () -> Unit = {}
+) {
+
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+            ) {
+
+                Icon(
+                    imageVector = Icons.Default.Medication,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .padding(8.dp)
+                        .size(20.dp)
+                )
+            }
+
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+
+                Text(
+                    text = producto.nombre,
+                    style = MaterialTheme.typography.titleSmall
+                )
+
+                Text(
+                    text = "${producto.precio}  ·  ${producto.stock}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                if (producto.fallida && !producto.ultimoError.isNullOrBlank()) {
+                    Text(
+                        text = producto.ultimoError,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+
+            if (producto.fallida) {
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                ) {
+                    Text(
+                        text = "Falló envío",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            } else if (producto.pendiente) {
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                ) {
+                    Text(
+                        text = "Pendiente",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            if (producto.requiereReposicion) {
+
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                ) {
+
+                    Text(
+                        text = "Reponer",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(
+                            horizontal = 8.dp,
+                            vertical = 4.dp
+                        )
+                    )
+                }
+            }
+
+            IconButton(onClick = onCompartir) {
+                Icon(
+                    imageVector = Icons.Default.Share,
+                    contentDescription = "Compartir producto",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BarraEstadoSincronizacion(
+    syncState: SincronizacionUiState,
+    avisoRed: String?,
+    onReintentarFallidas: () -> Unit
+) {
+    val hayProblema = syncState.fallidas > 0 || syncState.pendientes > 0 || avisoRed != null
+    val colorFondo = when {
+        syncState.fallidas > 0 -> MaterialTheme.colorScheme.errorContainer
+        hayProblema -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val colorContenido = when {
+        syncState.fallidas > 0 -> MaterialTheme.colorScheme.onErrorContainer
+        hayProblema -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    val mensajePrincipal = when {
+        syncState.enCurso -> "Sincronizando con PharmaSoft…"
+        avisoRed != null && syncState.pendientes > 0 ->
+            "Sin conexión · ${syncState.pendientes} cambios por enviar"
+        avisoRed != null -> avisoRed
+        syncState.pendientes > 0 -> "${syncState.pendientes} cambios por enviar"
+        else -> "En línea"
+    }
+
+    val antiguedad = formatearAntiguedad(syncState.ultimaSync, tiempoActualMillis())
+
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = colorFondo,
+        contentColor = colorContenido,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = when {
+                    syncState.fallidas > 0 -> Icons.Default.Error
+                    avisoRed != null -> Icons.Default.CloudOff
+                    syncState.enCurso -> Icons.Default.Sync
+                    else -> Icons.Default.CloudDone
+                },
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = colorContenido
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "$mensajePrincipal · $antiguedad",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorContenido
+                )
+                if (syncState.fallidas > 0) {
+                    Text(
+                        text = "${syncState.fallidas} filas fallaron permanentemente",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+            if (syncState.fallidas > 0) {
+                TextButton(onClick = onReintentarFallidas) {
+                    Text("Reintentar ahora")
+                }
+            }
+        }
+    }
+}
+
+private fun formatearAntiguedad(ultimaSync: Long?, ahora: Long): String {
+    if (ultimaSync == null) return "Pendiente de primera sincronización"
+    val diferenciaMinutos = ((ahora - ultimaSync).coerceAtLeast(0L)) / 60_000L
+    return when {
+        diferenciaMinutos < 1L -> "Actualizado hace unos instantes"
+        diferenciaMinutos < 60L -> "Actualizado hace $diferenciaMinutos min"
+        else -> {
+            val horas = diferenciaMinutos / 60L
+            "Actualizado hace $horas h"
+        }
+    }
+}

@@ -1,0 +1,49 @@
+CREATE TABLE producto (
+    id INTEGER NOT NULL PRIMARY KEY,
+    nombre TEXT NOT NULL,
+    precio REAL NOT NULL,
+    stock INTEGER NOT NULL,
+    pendiente INTEGER NOT NULL DEFAULT 0,
+    intentos INTEGER NOT NULL DEFAULT 0,
+    ultimoError TEXT
+);
+
+todos:
+SELECT * FROM producto ORDER BY id DESC;
+
+porId:
+SELECT * FROM producto WHERE id = ?;
+
+pendientes:
+SELECT * FROM producto WHERE pendiente = 1 ORDER BY id;
+
+pendientesPorEnviar:
+SELECT * FROM producto WHERE pendiente = 1 AND intentos < :maxIntentos ORDER BY id;
+
+contarPendientes:
+SELECT COUNT(*) FROM producto WHERE pendiente = 1 AND intentos < :maxIntentos;
+
+contarFallidas:
+SELECT COUNT(*) FROM producto WHERE pendiente = 1 AND intentos >= :maxIntentos;
+
+insertar:
+INSERT OR REPLACE INTO producto(id, nombre, precio, stock, pendiente, intentos, ultimoError)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+sumarIntento:
+UPDATE producto SET intentos = intentos + 1, ultimoError = ? WHERE id = ?;
+
+marcarFallida:
+UPDATE producto SET intentos = :maxIntentos, ultimoError = :motivo WHERE id = :id;
+
+reintentarFallidas:
+UPDATE producto SET intentos = 0, ultimoError = NULL WHERE pendiente = 1 AND intentos >= :maxIntentos;
+
+borrarPorId:
+DELETE FROM producto WHERE id = ?;
+
+borrarSincronizados:
+DELETE FROM producto WHERE pendiente = 0;
+
+menorId:
+SELECT COALESCE(MIN(id), 0) FROM producto;
